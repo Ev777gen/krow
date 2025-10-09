@@ -1,6 +1,6 @@
 {
   "name": "krowmare",
-  "version": "5.0.0",
+  "version": "1.0.0",
   "description": "",
   "main": "dist/krowmare.js",
   "files": [
@@ -18,16 +18,11 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^28.0.2",
-    "@rollup/plugin-node-resolve": "^16.0.0",
     "eslint": "^9.18.0",
     "jsdom": "^26.0.0",
     "rollup": "^4.31.0",
     "rollup-plugin-cleanup": "^3.2.1",
     "rollup-plugin-filesize": "^10.0.0",
     "vitest": "^3.0.3"
-  },
-  "dependencies": {
-    "fast-deep-equal": "^3.1.3"
   }
 }
