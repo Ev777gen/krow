@@ -1,4 +1,6 @@
 /**
+ * Framework version 1.0.0
+ * 
  * This is the first version of the framework.
  * 
  * The createApp() returns an object with two methods: mount() and unmount(). 
@@ -32,7 +34,7 @@
  */
 
 /**
- * - The framework’s first version is made of a renderer and a state manager wired together.
+ * - The framework’s first version is made of a renderer and a state manager wired together (see /help/illustrations/11).
  * - The renderer first destroys the DOM (if it exists) and then creates it from scratch. 
  *   This process isn’t very efficient and creates problems with the focus of input fields, among other things.
  * - The state manager is in charge of keeping the state and view of the application in sync.
@@ -43,50 +45,60 @@
  * - The state manager uses a reducer function to derive the new state from the old state and the command’s payload.
  */
 
-import { destroyDOM } from './destroy-dom'
-import { Dispatcher } from './dispatcher'
-import { mountDOM } from './mount-dom'
+/**
+ * Framework version 2.0.0
+ * 
+ * The reconciliation algorithm is added.
+ * 
+ * The reconciliation algorithm has two main steps: diffing (
+ * finding the differences between two virtual trees) and patching 
+ * (applying the differences to thereal DOM).
+ * 
+ * Diffing two virtual trees to find their differences boils down to solving three problems: 
+ * - finding the differences between two objects (./utils/objects.js, objectsDiff())
+ *   will be used to find the differences in attributes and styles
+ * - finding the differences between two arrays (./utils/arrays.js, farraysDiff())
+ *   will be used to find the differences between CSS classes
+ * - and finding a sequence of operations that can be applied to an array 
+ *   to transform it into another array (./utils/arrays.js, arraysDiffSequence())
+ *   will be used to find the differences between virtual DOM children
+ */
 
-export function createApp({ state, view, reducers = {} }) {
+import { destroyDOM } from './destroy-dom'
+import { mountDOM } from './mount-dom'
+import { h } from './h'
+
+export function createApp(RootComponent, props = {}) {
   let parentEl = null
+  let isMounted = false
   let vdom = null
 
-  const dispatcher = new Dispatcher()
-  const subscriptions = [dispatcher.afterEveryCommand(renderApp)]
-
-  for (const actionName in reducers) {
-    const reducer = reducers[actionName]
-
-    const subs = dispatcher.subscribe(actionName, (payload) => {
-      state = reducer(state, payload)
-    })
-
-    subscriptions.push(subs)
+  function reset() {
+    parentEl = null
+    isMounted = false
+    vdom = null
   }
-
-  function emit(eventName, payload) {
-    dispatcher.dispatch(eventName, payload)
-  }
-
-  function renderApp() {
-    if (vdom) {
-      destroyDOM(vdom)
-    }
-
-    vdom = view(state, emit)
-    mountDOM(vdom, parentEl)
-  }
-
+  
   return {
     mount(_parentEl) {
+      if (isMounted) {
+        throw new Error('The application is already mounted')
+      }
+
       parentEl = _parentEl
-      renderApp()
+      vdom = h(RootComponent, props)
+      
+      mountDOM(vdom, parentEl)
+      isMounted = true
     },
 
     unmount() {
+      if (!isMounted) {
+        throw new Error('The application is not mounted')
+      }
+
       destroyDOM(vdom)
-      vdom = null
-      subscriptions.forEach((unsubscribe) => unsubscribe())
+      reset()
     },
   }
 }

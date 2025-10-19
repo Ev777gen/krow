@@ -12,27 +12,51 @@
 import { DOM_TYPES } from './h'
 import { setAttributes } from './attributes'
 import { addEventListeners } from './events'
+import { extractPropsAndEvents } from './utils/props'
 
-export function mountDOM(vdom, parentEl) {
+export function mountDOM(vdom, parentEl, index, hostComponent = null) {
   switch (vdom.type) {
     case DOM_TYPES.ELEMENT: {
-      createElementNode(vdom, parentEl)
+      createElementNode(vdom, parentEl, index, hostComponent)
       break
     }
 
     case DOM_TYPES.TEXT: {
-      createTextNode(vdom, parentEl)
+      createTextNode(vdom, parentEl, index)
       break
     }
 
     case DOM_TYPES.FRAGMENT: {
-      createFragmentNodes(vdom, parentEl)
+      createFragmentNodes(vdom, parentEl, index, hostComponent)
+      break
+    }
+
+    case DOM_TYPES.COMPONENT: {
+      createComponentNode(vdom, parentEl, index, hostComponent)
       break
     }
 
     default: {
       throw new Error(`Can't mount DOM of type: ${vdom.type}`)
     }
+  }
+}
+
+function insert(el, parentEl, index) {
+  if (index === null || index === undefined) {
+    parentEl.append(el)
+    return
+  }
+  if (index < 0) {
+    throw new Error(`Index must be a positive integer, got ${index}`)
+  }
+
+  const children = parentEl.childNodes
+
+  if (index >= children.length) {
+    parentEl.append(el)
+  } else {
+    parentEl.insertBefore(el, children[index])
   }
 }
 
@@ -54,21 +78,21 @@ export function mountDOM(vdom, parentEl) {
  * Two special cases that are related to styling also need special handling: style and class. 
  * You’ll extract them from the props object and handle them separately.
  */
-function createElementNode(vdom, parentEl) {
-  const { tag, props, children } = vdom
+function createElementNode(vdom, parentEl, index, hostComponent) {
+  const { tag, children } = vdom
 
   const element = document.createElement(tag)
-  addProps(element, props, vdom)
+  addProps(element, vdom, hostComponent)
   vdom.el = element
 
-  children.forEach((child) => mountDOM(child, element))
-  parentEl.append(element)
+  children.forEach((child) => mountDOM(child, element, null, hostComponent))
+  insert(element, parentEl, index)
 }
 
-function addProps(el, props, vdom) {
-  const { on: events, ...attrs } = props
+function addProps(el, vdom, hostComponent) {
+  const { props: attrs, events } = extractPropsAndEvents(vdom)
   
-  vdom.listeners = addEventListeners(events, el)
+  vdom.listeners = addEventListeners(events, el, hostComponent)
   setAttributes(el, attrs)
 }
 
@@ -79,22 +103,35 @@ function addProps(el, props, vdom) {
  *   1 Save a reference to the real DOM node in the virtual node under the el property.
  *   2 Attach the text node to the parent element.
  */
-function createTextNode(vdom, parentEl) {
+function createTextNode(vdom, parentEl, index) {
   const { value } = vdom
   
   const textNode = document.createTextNode(value)
   vdom.el = textNode
   
-  parentEl.append(textNode)
+  insert(textNode, parentEl, index)
 }
 
 /**
  * Fragments are an array of children. They aren’t get attached to the DOM. Only the children are.
  * All the el references of those fragment virtual nodes should point to the same parent element.
  */
-function createFragmentNodes(vdom, parentEl) {
+function createFragmentNodes(vdom, parentEl, index, hostComponent) {
   const { children } = vdom
   vdom.el = parentEl
 
-  children.forEach((child) => mountDOM(child, parentEl))
+  children.forEach((child) => mountDOM(child, parentEl, index ? index + i : null, hostComponent))
+}
+
+/**
+ * 
+ */
+function createComponentNode(vdom, parentEl, index, hostComponent) {
+  const Component = vdom.tag
+  const { props, events } = extractPropsAndEvents(vdom)
+  const component = new Component(props, events, hostComponent)
+  
+  component.mount(parentEl, index)
+  vdom.component = component
+  vdom.el = component.firstElement
 }
