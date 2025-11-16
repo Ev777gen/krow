@@ -61,3 +61,7 @@ export function objectsDiffOptimized(oldObj, newObj) {
 // // Без удаления свойств
 // // simple 1
 // // optimized 0.5
+
+export function hasOwnProperty(obj, prop) {
+  return Object.prototype.hasOwnProperty.call(obj, prop)
+}

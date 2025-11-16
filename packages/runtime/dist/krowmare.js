@@ -1,11 +1,16 @@
-function addEventListener(eventName, handler, el) {
-  el.addEventListener(eventName, handler);
-  return handler
+function addEventListener(eventName, handler, el, hostComponent = null) {
+  function boundHandler(...args) {
+    hostComponent
+      ? handler.apply(hostComponent, args)
+      : handler(...args);
+  }
+  el.addEventListener(eventName, boundHandler);
+  return boundHandler
 }
-function addEventListeners(listeners = {}, el) {
+function addEventListeners(listeners = {}, el, hostComponent = null) {
   const addedListeners = {};
   Object.entries(listeners).forEach(([eventName, handler]) => {
-    const listener = addEventListener(eventName, handler, el);
+    const listener = addEventListener(eventName, handler, el, hostComponent);
     addedListeners[eventName] = listener;
   });
   return addedListeners
@@ -156,13 +161,15 @@ const DOM_TYPES = {
   TEXT: 'text',
   ELEMENT: 'element',
   FRAGMENT: 'fragment',
+  COMPONENT: 'component',
 };
 function h(tag, props = {}, children = []) {
+  const type = typeof tag === 'string' ? DOM_TYPES.ELEMENT : DOM_TYPES.COMPONENT;
   return {
     tag,
     props,
+    type,
     children: mapTextNodes(withoutNulls(children)),
-    type: DOM_TYPES.ELEMENT,
   }
 }
 function mapTextNodes(children) {
@@ -191,6 +198,10 @@ function destroyDOM(vdom) {
     }
     case DOM_TYPES.FRAGMENT: {
       removeFragmentNodes(vdom);
+      break
+    }
+    case DOM_TYPES.COMPONENT: {
+      vdom.component.unmount();
       break
     }
     default: {
@@ -294,10 +305,15 @@ function removeAttribute(el, name) {
   el.removeAttribute(name);
 }
 
-function mountDOM(vdom, parentEl, index) {
+function extractPropsAndEvents(vdom) {
+  const { on: events = {}, ...props } = vdom.props;
+  return { props, events }
+}
+
+function mountDOM(vdom, parentEl, index, hostComponent = null) {
   switch (vdom.type) {
     case DOM_TYPES.ELEMENT: {
-      createElementNode(vdom, parentEl, index);
+      createElementNode(vdom, parentEl, index, hostComponent);
       break
     }
     case DOM_TYPES.TEXT: {
@@ -305,7 +321,11 @@ function mountDOM(vdom, parentEl, index) {
       break
     }
     case DOM_TYPES.FRAGMENT: {
-      createFragmentNodes(vdom, parentEl, index);
+      createFragmentNodes(vdom, parentEl, index, hostComponent);
+      break
+    }
+    case DOM_TYPES.COMPONENT: {
+      createComponentNode(vdom, parentEl, index, hostComponent);
       break
     }
     default: {
@@ -328,17 +348,17 @@ function insert(el, parentEl, index) {
     parentEl.insertBefore(el, children[index]);
   }
 }
-function createElementNode(vdom, parentEl, index) {
+function createElementNode(vdom, parentEl, index, hostComponent) {
   const { tag, props, children } = vdom;
   const element = document.createElement(tag);
-  addProps(element, props, vdom);
+  addProps(element, props, vdom, hostComponent);
   vdom.el = element;
-  children.forEach((child) => mountDOM(child, element));
+  children.forEach((child) => mountDOM(child, element, null, hostComponent));
   insert(element, parentEl, index);
 }
-function addProps(el, props, vdom) {
+function addProps(el, props, vdom, hostComponent) {
   const { on: events, ...attrs } = props;
-  vdom.listeners = addEventListeners(events, el);
+  vdom.listeners = addEventListeners(events, el, hostComponent);
   setAttributes(el, attrs);
 }
 function createTextNode(vdom, parentEl, index) {
@@ -347,10 +367,18 @@ function createTextNode(vdom, parentEl, index) {
   vdom.el = textNode;
   insert(textNode, parentEl, index);
 }
-function createFragmentNodes(vdom, parentEl, index) {
+function createFragmentNodes(vdom, parentEl, index, hostComponent) {
   const { children } = vdom;
   vdom.el = parentEl;
-  children.forEach((child) => mountDOM(child, parentEl, index ? index + i : null));
+  children.forEach((child) => mountDOM(child, parentEl, index ? index + i : null, hostComponent));
+}
+function createComponentNode(vdom, parentEl, index, hostComponent) {
+  const Component = vdom.tag;
+  const { props, events } = extractPropsAndEvents(vdom);
+  const component = new Component(props, events, hostComponent);
+  component.mount(parentEl, index);
+  vdom.component = component;
+  vdom.el = component.firstElement;
 }
 
 function areNodesEqual(nodeOne, nodeTwo) {
@@ -374,6 +402,9 @@ function objectsDiff(oldObj, newObj) {
     updated: newKeys.filter((key) => key in oldObj && oldObj[key] !== newObj[key]),
   }
 }
+function hasOwnProperty(obj, prop) {
+  return Object.prototype.hasOwnProperty.call(obj, prop)
+}
 
 function isNotEmptyString(str) {
   return str !== ''
@@ -382,11 +413,11 @@ function isNotBlankOrEmptyString(str) {
   return isNotEmptyString(str.trim())
 }
 
-function patchDOM(oldVdom, newVdom, parentEl) {
+function patchDOM(oldVdom, newVdom, parentEl, hostComponent = null) {
   if (!areNodesEqual(oldVdom, newVdom)) {
     const index = findIndexInParent(parentEl, oldVdom.el);
     destroyDOM(oldVdom);
-    mountDOM(newVdom, parentEl, index);
+    mountDOM(newVdom, parentEl, index, hostComponent);
     return newVdom
   }
   newVdom.el = oldVdom.el;
@@ -396,11 +427,15 @@ function patchDOM(oldVdom, newVdom, parentEl) {
       return newVdom
     }
     case DOM_TYPES.ELEMENT: {
-      patchElement(oldVdom, newVdom);
+      patchElement(oldVdom, newVdom, hostComponent);
+      break
+    }
+    case DOM_TYPES.COMPONENT: {
+      patchComponent(oldVdom, newVdom);
       break
     }
   }
-  patchChildren(oldVdom, newVdom);
+  patchChildren(oldVdom, newVdom, hostComponent);
   return newVdom
 }
 function findIndexInParent(parentEl, el) {
@@ -418,7 +453,7 @@ function patchText(oldVdom, newVdom) {
     el.nodeValue = newText;
   }
 }
-function patchElement(oldVdom, newVdom) {
+function patchElement(oldVdom, newVdom, hostComponent) {
   const el = oldVdom.el;
   const {
     class: oldClass,
@@ -436,7 +471,7 @@ function patchElement(oldVdom, newVdom) {
   patchAttrs(el, oldAttrs, newAttrs);
   patchClasses(el, oldClass, newClass);
   patchStyles(el, oldStyle, newStyle);
-  newVdom.listeners = patchEvents(el, oldListeners, oldEvents, newEvents);
+  newVdom.listeners = patchEvents(el, oldListeners, oldEvents, newEvents, hostComponent);
 }
 function patchAttrs(el, oldAttrs, newAttrs) {
   const { added, removed, updated } = objectsDiff(oldAttrs, newAttrs);
@@ -477,7 +512,8 @@ function patchEvents(
   el,
   oldListeners = {},
   oldEvents = {},
-  newEvents = {}
+  newEvents = {},
+  hostComponent,
 ) {
   const { removed, added, updated } = objectsDiff(oldEvents, newEvents);
   for (const eventName of removed.concat(updated)) {
@@ -485,7 +521,7 @@ function patchEvents(
   }
   const addedListeners = {};
   for (const eventName of added.concat(updated)) {
-    const listener = addEventListener(eventName, newEvents[eventName], el);
+    const listener = addEventListener(eventName, newEvents[eventName], el, hostComponent);
     addedListeners[eventName] = listener;
   }
   return addedListeners
@@ -504,16 +540,17 @@ function extractChildren(vdom) {
   }
   return children
 }
-function patchChildren(oldVdom, newVdom) {
+function patchChildren(oldVdom, newVdom, hostComponent) {
   const oldChildren = extractChildren(oldVdom);
   const newChildren = extractChildren(newVdom);
   const parentEl = oldVdom.el;
   const diffSeq = arraysDiffSequence(oldChildren, newChildren, areNodesEqual);
   for (const operation of diffSeq) {
     const { originalIndex, index, item } = operation;
+    const offset = hostComponent?.offset ?? 0;
     switch (operation.op) {
       case ARRAY_DIFF_OP.ADD: {
-        mountDOM(item, parentEl, index);
+        mountDOM(item, parentEl, index + offset, hostComponent);
         break
       }
       case ARRAY_DIFF_OP.REMOVE: {
@@ -524,17 +561,24 @@ function patchChildren(oldVdom, newVdom) {
         const oldChild = oldChildren[originalIndex];
         const newChild = newChildren[index];
         const el = oldChild.el;
-        const elAtTargetIndex = parentEl.childNodes[index];
+        const elAtTargetIndex = parentEl.childNodes[index + offset];
         parentEl.insertBefore(el, elAtTargetIndex);
-        patchDOM(oldChild, newChild, parentEl);
+        patchDOM(oldChild, newChild, parentEl, hostComponent);
         break
       }
       case ARRAY_DIFF_OP.NOOP: {
-        patchDOM(oldChildren[originalIndex], newChildren[index], parentEl);
+        patchDOM(oldChildren[originalIndex], newChildren[index], parentEl, hostComponent);
         break
       }
     }
   }
+}
+function patchComponent(oldVdom, newVdom) {
+  const { component } = oldVdom;
+  const { props } = extractPropsAndEvents(newVdom);
+  component.updateProps(props);
+  newVdom.component = component;
+  newVdom.el = component.firstElement;
 }
 
 function createApp({ state, view, reducers = {} }) {
@@ -573,4 +617,154 @@ function createApp({ state, view, reducers = {} }) {
   }
 }
 
-export { createApp, h, hFragment, hText };
+function getDefaultExportFromCjs (x) {
+	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
+}
+
+var fastDeepEqual;
+var hasRequiredFastDeepEqual;
+function requireFastDeepEqual () {
+	if (hasRequiredFastDeepEqual) return fastDeepEqual;
+	hasRequiredFastDeepEqual = 1;
+	fastDeepEqual = function equal(a, b) {
+	  if (a === b) return true;
+	  if (a && b && typeof a == 'object' && typeof b == 'object') {
+	    if (a.constructor !== b.constructor) return false;
+	    var length, i, keys;
+	    if (Array.isArray(a)) {
+	      length = a.length;
+	      if (length != b.length) return false;
+	      for (i = length; i-- !== 0;)
+	        if (!equal(a[i], b[i])) return false;
+	      return true;
+	    }
+	    if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
+	    if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
+	    if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
+	    keys = Object.keys(a);
+	    length = keys.length;
+	    if (length !== Object.keys(b).length) return false;
+	    for (i = length; i-- !== 0;)
+	      if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
+	    for (i = length; i-- !== 0;) {
+	      var key = keys[i];
+	      if (!equal(a[key], b[key])) return false;
+	    }
+	    return true;
+	  }
+	  return a!==a && b!==b;
+	};
+	return fastDeepEqual;
+}
+
+var fastDeepEqualExports = requireFastDeepEqual();
+var equal = /*@__PURE__*/getDefaultExportFromCjs(fastDeepEqualExports);
+
+function defineComponent({ render, state, ...methods }) {
+  class Component {
+    #isMounted = false
+    #vdom = null
+    #hostEl = null
+    #eventHandlers = null
+    #parentComponent = null
+    #dispatcher = new Dispatcher()
+    #subscriptions = []
+    constructor(props = {}, eventHandlers = {}, parentComponent = null) {
+      this.props = props;
+      this.state = state ? state(props) : {};
+      this.#eventHandlers = eventHandlers;
+      this.#parentComponent = parentComponent;
+    }
+    get elements() {
+      if (this.#vdom == null) {
+        return []
+      }
+      if (this.#vdom.type === DOM_TYPES.FRAGMENT) {
+        return extractChildren(this.#vdom).flatMap((child) => {
+          if (child.type === DOM_TYPES.COMPONENT) {
+            return child.component.elements
+          }
+          return [child.el]
+        })
+      }
+      return [this.#vdom.el]
+    }
+    get firstElement() {
+      return this.elements[0]
+    }
+    get offset() {
+      if (this.#vdom.type === DOM_TYPES.FRAGMENT) {
+        return Array.from(this.#hostEl.children).indexOf(this.firstElement)
+      }
+      return 0
+    }
+    updateProps(props) {
+      const newProps = { ...this.props, ...props };
+      if (equal(this.props, newProps)) {
+        return
+      }
+      this.props = newProps;
+      this.#patch();
+    }
+    updateState(state) {
+      this.state = { ...this.state, ...state };
+      this.#patch();
+    }
+    emit(eventName, payload) {
+      this.#dispatcher.dispatch(eventName, payload);
+    }
+    render() {
+      return render.call(this)
+    }
+    mount(hostEl, index = null) {
+      if (this.#isMounted) {
+        throw new Error('Component is already mounted')
+      }
+      this.#vdom = this.render();
+      mountDOM(this.#vdom, hostEl, index, this);
+      this.#wireEventHandlers();
+      this.#hostEl = hostEl;
+      this.#isMounted = true;
+    }
+    unmount() {
+      if (!this.#isMounted) {
+        throw new Error('Component is not mounted')
+      }
+      destroyDOM(this.#vdom);
+      this.#subscriptions.forEach((unsubscribe) => unsubscribe());
+      this.#vdom = null;
+      this.#hostEl = null;
+      this.#isMounted = false;
+      this.#subscriptions = [];
+    }
+    #patch() {
+      if (!this.#isMounted) {
+        throw new Error('Component is not mounted')
+      }
+      const updatedVdom = this.render();
+      this.#vdom = patchDOM(this.#vdom, updatedVdom, this.#hostEl, this);
+    }
+    #wireEventHandlers() {
+      this.#subscriptions = Object.entries(this.#eventHandlers)
+        .map(([eventName, handler]) => this.#wireEventHandler(eventName, handler));
+    }
+    #wireEventHandler(eventName, handler) {
+      return this.#dispatcher.subscribe(eventName, (payload) => {
+        if (this.#parentComponent) {
+          handler.call(this.#parentComponent, payload);
+        } else {
+          handler(payload);
+        }
+      })
+    }
+  }
+  for (const methodName in methods) {
+    if (hasOwnProperty(Component, methodName)) {
+      throw new Error(`Method "${methodName}()" already exists in the component.`)
+    }
+    Component.prototype[methodName] = methods[methodName];
+  }
+  return Component
+}
+
+export { createApp, defineComponent, h, hFragment, hText };

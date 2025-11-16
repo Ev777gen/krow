@@ -16,12 +16,13 @@ import {
 } from './attributes'
 import { isNotBlankOrEmptyString } from './utils/strings'
 import { addEventListener } from './events'
+import { extractPropsAndEvents } from './utils/props'
 
-export function patchDOM(oldVdom, newVdom, parentEl) {
+export function patchDOM(oldVdom, newVdom, parentEl, hostComponent = null) {
   if (!areNodesEqual(oldVdom, newVdom)) {
     const index = findIndexInParent(parentEl, oldVdom.el)
     destroyDOM(oldVdom)
-    mountDOM(newVdom, parentEl, index)
+    mountDOM(newVdom, parentEl, index, hostComponent)
     
     return newVdom
   }
@@ -35,12 +36,17 @@ export function patchDOM(oldVdom, newVdom, parentEl) {
     }
 
     case DOM_TYPES.ELEMENT: {
-      patchElement(oldVdom, newVdom)
+      patchElement(oldVdom, newVdom, hostComponent)
+      break
+    }
+
+    case DOM_TYPES.COMPONENT: {
+      patchComponent(oldVdom, newVdom)
       break
     }
   }
 
-  patchChildren(oldVdom, newVdom)
+  patchChildren(oldVdom, newVdom, hostComponent)
 
   return newVdom
 }
@@ -64,7 +70,7 @@ function patchText(oldVdom, newVdom) {
   }
 }
 
-function patchElement(oldVdom, newVdom) {
+function patchElement(oldVdom, newVdom, hostComponent) {
   const el = oldVdom.el
 
   const {
@@ -86,7 +92,7 @@ function patchElement(oldVdom, newVdom) {
   patchAttrs(el, oldAttrs, newAttrs)
   patchClasses(el, oldClass, newClass)
   patchStyles(el, oldStyle, newStyle)
-  newVdom.listeners = patchEvents(el, oldListeners, oldEvents, newEvents)
+  newVdom.listeners = patchEvents(el, oldListeners, oldEvents, newEvents, hostComponent)
 }
 
 function patchAttrs(el, oldAttrs, newAttrs) {
@@ -138,7 +144,8 @@ function patchEvents(
   el,
   oldListeners = {},
   oldEvents = {},
-  newEvents = {}
+  newEvents = {},
+  hostComponent,
 ) {
   const { removed, added, updated } = objectsDiff(oldEvents, newEvents)
   
@@ -149,7 +156,7 @@ function patchEvents(
   const addedListeners = {}
 
   for (const eventName of added.concat(updated)) {
-    const listener = addEventListener(eventName, newEvents[eventName], el)
+    const listener = addEventListener(eventName, newEvents[eventName], el, hostComponent)
     addedListeners[eventName] = listener
   }
 
@@ -174,7 +181,7 @@ export function extractChildren(vdom) {
   return children
 }
 
-function patchChildren(oldVdom, newVdom) {
+function patchChildren(oldVdom, newVdom, hostComponent) {
   const oldChildren = extractChildren(oldVdom)
   const newChildren = extractChildren(newVdom)
   const parentEl = oldVdom.el
@@ -182,10 +189,11 @@ function patchChildren(oldVdom, newVdom) {
   
   for (const operation of diffSeq) {
     const { originalIndex, index, item } = operation
+    const offset = hostComponent?.offset ?? 0
 
     switch (operation.op) {
       case ARRAY_DIFF_OP.ADD: {
-        mountDOM(item, parentEl, index)
+        mountDOM(item, parentEl, index + offset, hostComponent)
         break
       }
       case ARRAY_DIFF_OP.REMOVE: {
@@ -196,19 +204,29 @@ function patchChildren(oldVdom, newVdom) {
         const oldChild = oldChildren[originalIndex]
         const newChild = newChildren[index]
         const el = oldChild.el
-        const elAtTargetIndex = parentEl.childNodes[index]
+        const elAtTargetIndex = parentEl.childNodes[index + offset]
 
         parentEl.insertBefore(el, elAtTargetIndex) // Note: The browser automatically removes the node from its original position when you move it
-        patchDOM(oldChild, newChild, parentEl)
+        patchDOM(oldChild, newChild, parentEl, hostComponent)
 
         break
       }
       case ARRAY_DIFF_OP.NOOP: {
         // You don’t need to move these nodes explicitly because they fall into their new positions naturally. 
         // But you do need to patch them because they may have changed in other ways. 
-        patchDOM(oldChildren[originalIndex], newChildren[index], parentEl)
+        patchDOM(oldChildren[originalIndex], newChildren[index], parentEl, hostComponent)
         break
       }
     }
   }
+}
+
+function patchComponent(oldVdom, newVdom) {
+  const { component } = oldVdom
+  const { props } = extractPropsAndEvents(newVdom)
+
+  component.updateProps(props)
+  
+  newVdom.component = component
+  newVdom.el = component.firstElement
 }
