@@ -13,6 +13,7 @@ import { DOM_TYPES } from './h'
 import { setAttributes } from './attributes'
 import { addEventListeners } from './events'
 import { extractPropsAndEvents } from './utils/props'
+import { enqueueJob } from './scheduler'
 
 export function mountDOM(vdom, parentEl, index, hostComponent = null) {
   switch (vdom.type) {
@@ -33,6 +34,7 @@ export function mountDOM(vdom, parentEl, index, hostComponent = null) {
 
     case DOM_TYPES.COMPONENT: {
       createComponentNode(vdom, parentEl, index, hostComponent)
+      enqueueJob(() => vdom.component.onMounted())
       break
     }
 
@@ -127,9 +129,10 @@ function createFragmentNodes(vdom, parentEl, index, hostComponent) {
  * 
  */
 function createComponentNode(vdom, parentEl, index, hostComponent) {
-  const Component = vdom.tag
+  const { tag: Component, children } = vdom
   const { props, events } = extractPropsAndEvents(vdom)
   const component = new Component(props, events, hostComponent)
+  component.setExternalContent(children)
   
   component.mount(parentEl, index)
   vdom.component = component
