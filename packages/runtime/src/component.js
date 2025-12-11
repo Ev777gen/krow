@@ -1,13 +1,16 @@
 import { destroyDOM } from './destroy-dom'
 import { mountDOM } from './mount-dom'
 import { patchDOM, extractChildren } from './patch-dom'
-import { DOM_TYPES } from './h'
+import { DOM_TYPES, didCreateSlot, resetDidCreateSlot } from './h'
 import { hasOwnProperty } from './utils/objects'
 import equal from 'fast-deep-equal'
 import { Dispatcher } from './dispatcher'
+import { fillSlots } from './slots'
+
+const emptyFn = () => {}
 
 // This is a factory function:
-export function defineComponent({ render, state, ...methods }) {
+export function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emptyFn, ...methods }) {
   class Component {
     #isMounted = false
     #vdom = null
@@ -16,12 +19,21 @@ export function defineComponent({ render, state, ...methods }) {
     #parentComponent = null
     #dispatcher = new Dispatcher()
     #subscriptions = [] 
+    #children = []
 
     constructor(props = {}, eventHandlers = {}, parentComponent = null) {
       this.props = props
       this.state = state ? state(props) : {}
       this.#eventHandlers = eventHandlers
       this.#parentComponent = parentComponent
+    }
+
+    onMounted() {
+      return Promise.resolve(onMounted.call(this))
+    }
+    
+    onUnmounted() {
+      return Promise.resolve(onUnmounted.call(this))
     }
 
     get elements() {
@@ -53,6 +65,10 @@ export function defineComponent({ render, state, ...methods }) {
 
       return 0
     }
+    
+    setExternalContent(children) {
+      this.#children = children
+    }
 
     updateProps(props) {
       const newProps = { ...this.props, ...props }
@@ -74,7 +90,14 @@ export function defineComponent({ render, state, ...methods }) {
     }
 
     render() {
-      return render.call(this)
+      const vdom = render.call(this)
+
+      if (didCreateSlot()) {
+        fillSlots(vdom, this.#children)
+        resetDidCreateSlot()
+      }
+
+      return vdom
     }
 
     mount(hostEl, index = null) {

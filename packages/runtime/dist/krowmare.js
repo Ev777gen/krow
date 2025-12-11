@@ -185,6 +185,39 @@ function hFragment(vNodes) {
   }
 }
 
+let isScheduled = false;
+const jobs = [];
+function enqueueJob(job) {
+  jobs.push(job);
+  scheduleUpdate();
+}
+function scheduleUpdate() {
+  if (isScheduled) return
+  isScheduled = true;
+  queueMicrotask(processJobs);
+}
+function processJobs() {
+  while (jobs.length > 0) {
+    const job = jobs.shift();
+    const result = job();
+    Promise.resolve(result).then(
+      () => {
+      },
+      (error) => {
+        console.error(`[scheduler]: ${error}`);
+      }
+    );
+  }
+  isScheduled = false;
+}
+function nextTick() {
+  scheduleUpdate();
+  return flushPromises()
+}
+function flushPromises() {
+  return new Promise((resolve) => setTimeout(resolve))
+}
+
 function destroyDOM(vdom) {
   const { type } = vdom;
   switch (type) {
@@ -202,6 +235,7 @@ function destroyDOM(vdom) {
     }
     case DOM_TYPES.COMPONENT: {
       vdom.component.unmount();
+      enqueueJob(() => vdom.component.onUnmounted());
       break
     }
     default: {
@@ -226,40 +260,6 @@ function removeElementNode(vdom) {
 function removeFragmentNodes(vdom) {
   const { children } = vdom;
   children.forEach(destroyDOM);
-}
-
-class Dispatcher {
-  #subs = new Map()
-  #afterHandlers = []
-  subscribe(commandName, handler) {
-    if (!this.#subs.has(commandName)) {
-      this.#subs.set(commandName, []);
-    }
-    const handlers = this.#subs.get(commandName);
-    if (handlers.includes(handler)) {
-      return () => {}
-    }
-    handlers.push(handler);
-    return () => {
-      const idx = handlers.indexOf(handler);
-      handlers.splice(idx, 1);
-    }
-  }
-  afterEveryCommand(handler) {
-    this.#afterHandlers.push(handler);
-    return () => {
-      const idx = this.#afterHandlers.indexOf(handler);
-      this.#afterHandlers.splice(idx, 1);
-    }
-  }
-  dispatch(commandName, payload) {
-    if (this.#subs.has(commandName)) {
-      this.#subs.get(commandName).forEach((handler) => handler(payload));
-    } else {
-      console.warn(`No handlers for command: ${commandName}`);
-    }
-    this.#afterHandlers.forEach((handler) => handler());
-  }
 }
 
 function setAttributes(el, attrs) {
@@ -307,6 +307,7 @@ function removeAttribute(el, name) {
 
 function extractPropsAndEvents(vdom) {
   const { on: events = {}, ...props } = vdom.props;
+  delete props.key;
   return { props, events }
 }
 
@@ -326,6 +327,7 @@ function mountDOM(vdom, parentEl, index, hostComponent = null) {
     }
     case DOM_TYPES.COMPONENT: {
       createComponentNode(vdom, parentEl, index, hostComponent);
+      enqueueJob(() => vdom.component.onMounted());
       break
     }
     default: {
@@ -349,15 +351,15 @@ function insert(el, parentEl, index) {
   }
 }
 function createElementNode(vdom, parentEl, index, hostComponent) {
-  const { tag, props, children } = vdom;
+  const { tag, children } = vdom;
   const element = document.createElement(tag);
-  addProps(element, props, vdom, hostComponent);
+  addProps(element, vdom, hostComponent);
   vdom.el = element;
   children.forEach((child) => mountDOM(child, element, null, hostComponent));
   insert(element, parentEl, index);
 }
-function addProps(el, props, vdom, hostComponent) {
-  const { on: events, ...attrs } = props;
+function addProps(el, vdom, hostComponent) {
+  const { props: attrs, events } = extractPropsAndEvents(vdom);
   vdom.listeners = addEventListeners(events, el, hostComponent);
   setAttributes(el, attrs);
 }
@@ -381,14 +383,60 @@ function createComponentNode(vdom, parentEl, index, hostComponent) {
   vdom.el = component.firstElement;
 }
 
+function createApp(RootComponent, props = {}) {
+  let parentEl = null;
+  let isMounted = false;
+  let vdom = null;
+  function reset() {
+    parentEl = null;
+    isMounted = false;
+    vdom = null;
+  }
+  return {
+    mount(_parentEl) {
+      if (isMounted) {
+        throw new Error('The application is already mounted')
+      }
+      parentEl = _parentEl;
+      vdom = h(RootComponent, props);
+      mountDOM(vdom, parentEl);
+      isMounted = true;
+    },
+    unmount() {
+      if (!isMounted) {
+        throw new Error('The application is not mounted')
+      }
+      destroyDOM(vdom);
+      reset();
+    },
+  }
+}
+
 function areNodesEqual(nodeOne, nodeTwo) {
   if (nodeOne.type !== nodeTwo.type) {
     return false
   }
   if (nodeOne.type === DOM_TYPES.ELEMENT) {
-    const { tag: tagOne } = nodeOne;
-    const { tag: tagTwo } = nodeTwo;
-    return tagOne === tagTwo
+    const {
+      tag: tagOne,
+      props: { key: keyOne },
+    } = nodeOne;
+    const {
+      tag: tagTwo,
+      props: { key: keyTwo },
+    } = nodeTwo;
+    return tagOne === tagTwo && keyOne === keyTwo
+  }
+  if (nodeOne.type === DOM_TYPES.COMPONENT) {
+    const {
+      tag: componentOne,
+      props: { key: keyOne },
+    } = nodeOne;
+    const {
+      tag: componentTwo,
+      props: { key: keyTwo },
+    } = nodeTwo;
+    return componentOne === componentTwo && keyOne === keyTwo
   }
   return true
 }
@@ -581,42 +629,6 @@ function patchComponent(oldVdom, newVdom) {
   newVdom.el = component.firstElement;
 }
 
-function createApp({ state, view, reducers = {} }) {
-  let parentEl = null;
-  let vdom = null;
-  const dispatcher = new Dispatcher();
-  const subscriptions = [dispatcher.afterEveryCommand(renderApp)];
-  for (const actionName in reducers) {
-    const reducer = reducers[actionName];
-    const subs = dispatcher.subscribe(actionName, (payload) => {
-      state = reducer(state, payload);
-    });
-    subscriptions.push(subs);
-  }
-  function emit(eventName, payload) {
-    dispatcher.dispatch(eventName, payload);
-  }
-  function renderApp() {
-    const newVdom = view(state, emit);
-    vdom = patchDOM(vdom, newVdom, parentEl);
-  }
-  return {
-    mount(_parentEl) {
-      if (vdom) {
-        throw new Error('Application is already mounted')
-      }
-      parentEl = _parentEl;
-      vdom = view(state, emit);
-      mountDOM(vdom, parentEl);
-    },
-    unmount() {
-      destroyDOM(vdom);
-      vdom = null;
-      subscriptions.forEach((unsubscribe) => unsubscribe());
-    },
-  }
-}
-
 function getDefaultExportFromCjs (x) {
 	return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, 'default') ? x['default'] : x;
 }
@@ -660,7 +672,42 @@ function requireFastDeepEqual () {
 var fastDeepEqualExports = requireFastDeepEqual();
 var equal = /*@__PURE__*/getDefaultExportFromCjs(fastDeepEqualExports);
 
-function defineComponent({ render, state, ...methods }) {
+class Dispatcher {
+  #subs = new Map()
+  #afterHandlers = []
+  subscribe(commandName, handler) {
+    if (!this.#subs.has(commandName)) {
+      this.#subs.set(commandName, []);
+    }
+    const handlers = this.#subs.get(commandName);
+    if (handlers.includes(handler)) {
+      return () => {}
+    }
+    handlers.push(handler);
+    return () => {
+      const idx = handlers.indexOf(handler);
+      handlers.splice(idx, 1);
+    }
+  }
+  afterEveryCommand(handler) {
+    this.#afterHandlers.push(handler);
+    return () => {
+      const idx = this.#afterHandlers.indexOf(handler);
+      this.#afterHandlers.splice(idx, 1);
+    }
+  }
+  dispatch(commandName, payload) {
+    if (this.#subs.has(commandName)) {
+      this.#subs.get(commandName).forEach((handler) => handler(payload));
+    } else {
+      console.warn(`No handlers for command: ${commandName}`);
+    }
+    this.#afterHandlers.forEach((handler) => handler());
+  }
+}
+
+const emptyFn = () => {};
+function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emptyFn, ...methods }) {
   class Component {
     #isMounted = false
     #vdom = null
@@ -674,6 +721,12 @@ function defineComponent({ render, state, ...methods }) {
       this.state = state ? state(props) : {};
       this.#eventHandlers = eventHandlers;
       this.#parentComponent = parentComponent;
+    }
+    onMounted() {
+      return Promise.resolve(onMounted.call(this))
+    }
+    onUnmounted() {
+      return Promise.resolve(onUnmounted.call(this))
     }
     get elements() {
       if (this.#vdom == null) {
@@ -767,4 +820,4 @@ function defineComponent({ render, state, ...methods }) {
   return Component
 }
 
-export { createApp, defineComponent, h, hFragment, hText };
+export { DOM_TYPES, createApp, defineComponent, h, hFragment, hText, nextTick };
