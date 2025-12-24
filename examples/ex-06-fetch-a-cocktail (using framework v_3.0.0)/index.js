@@ -1,4 +1,4 @@
-import { h, hFragment, defineComponent } from "../../packages/runtime/dist/krowmare.js"
+import { h, hFragment, defineComponent } from "../../packages/runtime/dist/krow.js"
 
 const url = 'https://www.thecocktaildb.com/api/json/v1/1/random.php'
 

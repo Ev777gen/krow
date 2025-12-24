@@ -1,10 +1,10 @@
 {
-  "name": "krowmare",
-  "version": "4.1.0",
+  "name": "krow",
+  "version": "5.0.0",
   "description": "",
-  "main": "dist/krowmare.js",
+  "main": "dist/krow.js",
   "files": [
-    "dist/krowmare.js"
+    "dist/krow.js"
   ],
   "scripts": {
     "prepack": "npm run build",

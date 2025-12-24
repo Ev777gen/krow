@@ -1,4 +1,4 @@
-import { createApp, h, hFragment } from "../../packages/runtime/dist/krowmare.js"
+import { createApp, h, hFragment } from "../../packages/runtime/dist/krow.js"
 
 function createGrid(rows, columns) {
   return Array(rows).fill(undefined).map((_) => {

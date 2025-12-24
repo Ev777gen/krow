@@ -1,4 +1,4 @@
-import { h, hText, defineComponent } from "../../packages/runtime/dist/krowmare.js"
+import { h, hText, defineComponent } from "../../packages/runtime/dist/krow.js"
 
 const MyCounter = defineComponent({
   state() {

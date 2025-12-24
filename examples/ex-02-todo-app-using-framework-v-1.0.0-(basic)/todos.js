@@ -1,4 +1,4 @@
-import { createApp, h, hFragment } from "../../packages/runtime/dist/krowmare.js"
+import { createApp, h, hFragment } from "../../packages/runtime/dist/krow.js"
 
 const state = {
   todos: ['Погулять с собакой', 'Полить цветы', 'Приготовить обед'],
