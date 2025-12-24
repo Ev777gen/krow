@@ -1,4 +1,4 @@
-import { createApp, h, hText } from "../../packages/runtime/dist/krowmare.js"
+import { createApp, h, hText } from "../../packages/runtime/dist/krow.js"
 
 // Example 1. Counter-button
 createApp({

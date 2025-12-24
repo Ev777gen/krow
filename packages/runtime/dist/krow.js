@@ -162,6 +162,7 @@ const DOM_TYPES = {
   ELEMENT: 'element',
   FRAGMENT: 'fragment',
   COMPONENT: 'component',
+  SLOT: 'slot',
 };
 function h(tag, props = {}, children = []) {
   const type = typeof tag === 'string' ? DOM_TYPES.ELEMENT : DOM_TYPES.COMPONENT;
@@ -183,6 +184,17 @@ function hFragment(vNodes) {
     type: DOM_TYPES.FRAGMENT,
     children: mapTextNodes(withoutNulls(vNodes)),
   }
+}
+let hSlotCalled = false;
+function didCreateSlot() {
+  return hSlotCalled
+}
+function resetDidCreateSlot() {
+  hSlotCalled = false;
+}
+function hSlot(children = []) {
+  hSlotCalled = true;
+  return { type: DOM_TYPES.SLOT, children }
 }
 
 let isScheduled = false;
@@ -375,9 +387,10 @@ function createFragmentNodes(vdom, parentEl, index, hostComponent) {
   children.forEach((child) => mountDOM(child, parentEl, index ? index + i : null, hostComponent));
 }
 function createComponentNode(vdom, parentEl, index, hostComponent) {
-  const Component = vdom.tag;
+  const { tag: Component, children } = vdom;
   const { props, events } = extractPropsAndEvents(vdom);
   const component = new Component(props, events, hostComponent);
+  component.setExternalContent(children);
   component.mount(parentEl, index);
   vdom.component = component;
   vdom.el = component.firstElement;
@@ -623,7 +636,9 @@ function patchChildren(oldVdom, newVdom, hostComponent) {
 }
 function patchComponent(oldVdom, newVdom) {
   const { component } = oldVdom;
+  const { children } = newVdom;
   const { props } = extractPropsAndEvents(newVdom);
+  component.setExternalContent(children);
   component.updateProps(props);
   newVdom.component = component;
   newVdom.el = component.firstElement;
@@ -706,6 +721,43 @@ class Dispatcher {
   }
 }
 
+function traverseDFS(
+  vdom,
+  processNode,
+  shouldSkipBranch = () => false,
+  parentNode = null,
+  index = null
+) {
+  if (shouldSkipBranch(vdom)) return
+  processNode(vdom, parentNode, index);
+  if (vdom.children) {
+    vdom.children.forEach((child, i) =>
+      traverseDFS(child, processNode, shouldSkipBranch, vdom, i)
+    );
+  }
+}
+
+function fillSlots(vdom, externalContent = []) {
+  function processNode(node, parent, index) {
+    insertViewInSlot(node, parent, index, externalContent);
+  }
+  traverseDFS(vdom, processNode, shouldSkipBranch);
+}
+function insertViewInSlot(node, parent, index, externalContent) {
+  if (node.type !== DOM_TYPES.SLOT) return
+  const defaultContent = node.children;
+  const views = externalContent.length > 0 ? externalContent : defaultContent;
+  const hasContent = views.length > 0;
+  if (hasContent) {
+    parent.children.splice(index, 1, hFragment(views));
+  } else {
+    parent.children.splice(index, 1);
+  }
+}
+function shouldSkipBranch(node) {
+  return node.type === DOM_TYPES.COMPONENT
+}
+
 const emptyFn = () => {};
 function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emptyFn, ...methods }) {
   class Component {
@@ -716,6 +768,7 @@ function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emp
     #parentComponent = null
     #dispatcher = new Dispatcher()
     #subscriptions = []
+    #children = []
     constructor(props = {}, eventHandlers = {}, parentComponent = null) {
       this.props = props;
       this.state = state ? state(props) : {};
@@ -751,6 +804,9 @@ function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emp
       }
       return 0
     }
+    setExternalContent(children) {
+      this.#children = children;
+    }
     updateProps(props) {
       const newProps = { ...this.props, ...props };
       if (equal(this.props, newProps)) {
@@ -767,7 +823,12 @@ function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emp
       this.#dispatcher.dispatch(eventName, payload);
     }
     render() {
-      return render.call(this)
+      const vdom = render.call(this);
+      if (didCreateSlot()) {
+        fillSlots(vdom, this.#children);
+        resetDidCreateSlot();
+      }
+      return vdom
     }
     mount(hostEl, index = null) {
       if (this.#isMounted) {
@@ -820,4 +881,4 @@ function defineComponent({ render, state, onMounted = emptyFn, onUnmounted = emp
   return Component
 }
 
-export { DOM_TYPES, createApp, defineComponent, h, hFragment, hText, nextTick };
+export { DOM_TYPES, createApp, defineComponent, h, hFragment, hSlot, hText, nextTick };

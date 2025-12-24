@@ -7,7 +7,7 @@ export default {
   input: 'src/index.js',
   plugins: [commonjs(), nodeResolve(), cleanup()],
   output: {
-    file: 'dist/krowmare.js',
+    file: 'dist/krow.js',
     format: 'esm',
     plugins: [filesize()],
   },

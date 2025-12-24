@@ -3,7 +3,7 @@ import {
   defineComponent,
   h,
   hFragment,
-} from "../../packages/runtime/dist/krowmare.js"
+} from "../../packages/runtime/dist/krow.js"
 
 const App = defineComponent({
   state() {
